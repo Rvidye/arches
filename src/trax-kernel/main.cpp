@@ -218,7 +218,7 @@ inline static void sphere_kernel(const TRaXKernelArgs& args)
 #ifdef __riscv 
 int main()
 {
-	kernel(*(const TRaXKernelArgs*)TRAX_KERNEL_ARGS_ADDRESS);
+	sphere_kernel(*(const TRaXKernelArgs*)TRAX_KERNEL_ARGS_ADDRESS);
 	return 0;
 }
 #else
