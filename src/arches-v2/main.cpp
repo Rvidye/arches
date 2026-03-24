@@ -88,6 +88,22 @@ const static InstructionInfo isa_custom0_000_imm[8] =
 		fr[19].f32 = hit.bc[1];
 		fr[20].u32 = hit.id;
 	}),
+	InstructionInfo(0x3, "spherisect", InstrType::CUSTOM4, Encoding::U, RegFile::FLOAT, EXEC_DECL
+	{
+		Register32 * fr = unit->float_regs->registers;
+
+		rtm::Ray ray;
+		ray.o.x = fr[0].f32;  ray.o.y = fr[1].f32;  ray.o.z = fr[2].f32;
+		ray.t_min = fr[3].f32;
+		ray.d.x = fr[4].f32;  ray.d.y = fr[5].f32;  ray.d.z = fr[6].f32;
+		ray.t_max = fr[7].f32;
+
+		Sphere sphere;
+		sphere.center.x = fr[8].f32;  sphere.center.y = fr[9].f32;  sphere.center.z = fr[10].f32;
+		sphere.radius = fr[11].f32;
+
+		unit->float_regs->registers[instr.u.rd].f32 = intersect_sphere(ray, sphere);
+	}),
 };
 
 const static InstructionInfo isa_custom0_funct3[8] =
@@ -167,6 +183,10 @@ static TRaXKernelArgs initilize_buffers(Units::UnitMainMemoryBase** drams, const
 
 	args.light_dir = rtm::normalize(rtm::vec3(4.5f, 42.5f, 5.0f));
 	args.camera = sim_config.camera;
+
+	if (scene_name == "spheres") {
+		scene_name = "sponza";
+	}
 
 	rtm::Mesh mesh(datasets_folder + scene_name + ".obj");
 	rtm::CWBVH bvh(mesh, (cache_folder + scene_name + ".bvh").c_str(), sim_config.get_int("bvh-preset"), sim_config.get_int("bvh-merging"));
@@ -478,6 +498,7 @@ static void run_sim_trax(SimulationConfig& sim_config)
 	ISA::RISCV::InstructionTypeNameDatabase::get_instance()[ISA::RISCV::InstrType::CUSTOM1] = "BOXISECT";
 	ISA::RISCV::InstructionTypeNameDatabase::get_instance()[ISA::RISCV::InstrType::CUSTOM2] = "TRIISECT";
 	ISA::RISCV::InstructionTypeNameDatabase::get_instance()[ISA::RISCV::InstrType::CUSTOM3] = "SAMPLE2D";
+	ISA::RISCV::InstructionTypeNameDatabase::get_instance()[ISA::RISCV::InstrType::CUSTOM4] = "SPHERISECT";
 	ISA::RISCV::InstructionTypeNameDatabase::get_instance()[ISA::RISCV::InstrType::CUSTOM7] = "TRACERAY";
 	ISA::RISCV::isa[ISA::RISCV::CUSTOM_OPCODE0] = ISA::RISCV::TRaX::custom0;
 
@@ -589,6 +610,11 @@ static void run_sim_trax(SimulationConfig& sim_config)
 		simulator.register_unit(sfu_list.back());
 		unit_table[(uint)ISA::RISCV::InstrType::FDIV] = sfu_list.back();
 		unit_table[(uint)ISA::RISCV::InstrType::FSQRT] = sfu_list.back();
+
+		// Sphere intersection SFU: 2 pipelines, 8-cycle latency
+		sfu_list.push_back(_new Units::UnitSFU(2, 8, 1, num_tps));
+		simulator.register_unit(sfu_list.back());
+		unit_table[(uint)ISA::RISCV::InstrType::CUSTOM4] = sfu_list.back();
 
 	#if TRAX_USE_HARDWARE_INTERSECTORS
 		sfu_list.push_back(_new Units::UnitSFU(2, 3, 1, num_tps_per_tm));

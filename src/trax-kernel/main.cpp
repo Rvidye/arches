@@ -174,6 +174,47 @@ inline static void mandelbrot(const TRaXKernelArgs& args)
 	}
 }
 
+inline static void sphere_kernel(const TRaXKernelArgs& args)
+{
+	constexpr uint NUM_SPHERES = 3;
+	const Sphere spheres[NUM_SPHERES] = {
+		{ rtm::vec3(-3.0f,  0.0f, -5.0f), 1.0f, rtm::vec3(1.0f, 0.0f, 0.0f) }, // red
+		{ rtm::vec3(0.0f,  0.0f, -5.0f), 1.0f, rtm::vec3(0.0f, 1.0f, 0.0f) }, // green
+		{ rtm::vec3(3.0f,  0.0f, -5.0f), 1.0f, rtm::vec3(0.0f, 0.0f, 1.0f) }, // blue
+	};
+
+	for (uint index = fchthrd(); index < args.framebuffer_size; index = fchthrd())
+	{
+		uint32_t x = index % args.framebuffer_width;
+		uint32_t y = index / args.framebuffer_width;
+
+		rtm::Ray ray = args.camera.generate_ray_through_pixel(x, y);
+
+		float closest_t = ray.t_max;
+		int closest_idx = -1;
+
+		for (uint i = 0; i < NUM_SPHERES; ++i)
+		{
+			float t = _spherisect(ray, spheres[i]);
+			if (t < closest_t)
+			{
+				closest_t = t;
+				closest_idx = i;
+			}
+		}
+
+		if (closest_idx >= 0)
+		{
+			rtm::vec3 color = spheres[closest_idx].color;
+			args.framebuffer[index] = encode_pixel(color);
+		}
+		else
+		{
+			args.framebuffer[index] = 0xff000000;
+		}
+	}
+}
+
 #ifdef __riscv 
 int main()
 {
@@ -189,8 +230,8 @@ int main(int argc, char* argv[])
 	std::string scene_name = argv[1];
 
 	TRaXKernelArgs args;
-	args.framebuffer_width = 1920;
-	args.framebuffer_height = 1080;
+	args.framebuffer_width = 1024;
+	args.framebuffer_height = 1024;
 	args.framebuffer_size = args.framebuffer_width * args.framebuffer_height;
 	std::vector<uint32_t> fb_vec(args.framebuffer_size);
 	args.framebuffer = fb_vec.data();
@@ -205,12 +246,37 @@ int main(int argc, char* argv[])
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(-900.6f, 150.8f, 120.74f), rtm::vec3(79.7f, 14.0f, -17.4f));
 	if(scene_name.compare("intel-sponza") == 0)
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(-900.6f, 150.8f, 120.74f), rtm::vec3(79.7f, 14.0f, -17.4f));
+	if (scene_name.compare("sponza") == 0)
+		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(0.0f, 2.0f, 0.0f), rtm::vec3(90.0f, 0.0f, -1.0f));
 	if(scene_name.compare("san-miguel") == 0)
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(7.448, 1.014, 12.357), rtm::vec3(7.448 + 0.608, 1.014 + 0.026, 12.357 - 0.794));
 	if(scene_name.compare("bistro") == 0)
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(-8.0, 2.0, 2.0), rtm::vec3(0.0f, 1.0f, -1.0f));
 	if(scene_name.compare("hairball") == 0)
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 24.0f, rtm::vec3(0.0, 0.0, 10.0), rtm::vec3(0.0f, 0.0f, 0.0f));
+
+	// Testing Sphere Kernel
+	if (scene_name.compare("spheres") == 0)
+	{
+		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 12.0f, rtm::vec3(0.0f, 0.0f, 0.0f), rtm::vec3(0.0f, 0.0f, -5.0f));
+
+		printf("\nStarting Sphere Kernel\n");
+		auto start = std::chrono::high_resolution_clock::now();
+
+		std::vector<std::thread> threads;
+		uint thread_count = max(std::thread::hardware_concurrency() - 2u, 1u);
+		for (uint i = 1; i < thread_count; ++i) threads.emplace_back(sphere_kernel, args);
+		sphere_kernel(args);
+		for (uint i = 1; i < thread_count; ++i) threads[i - 1].join();
+
+		auto stop = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+		printf("Runtime: %dms\n", (uint)duration.count());
+
+		stbi_flip_vertically_on_write(true);
+		stbi_write_png("./out.png", args.framebuffer_width, args.framebuffer_height, 4, args.framebuffer, 0);
+		return 0;
+	}
 
 	std::string mesh_path = "../../../datasets/" + scene_name + ".obj";
 	std::string bvh_cache_path = "../../../datasets/cache/" + scene_name + ".bvh";

@@ -15,6 +15,13 @@ typedef rtm::HE2CWBVH CWBVH;
 #endif
 }
 
+struct Sphere
+{
+	rtm::vec3 center;
+	float radius;
+	rtm::vec3 color;
+};
+
 struct TRaXKernelArgs
 {
 	uint32_t framebuffer_width;

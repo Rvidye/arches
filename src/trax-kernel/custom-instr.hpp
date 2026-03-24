@@ -63,3 +63,32 @@ rtm::vec4 inline sample2d(Texture2D* texture, rtm::vec2 uv)
 	return texture->sample(uv);
 #endif
 }
+
+inline float _spherisect(const rtm::Ray& ray, const Sphere& sphere)
+{
+#if defined(__riscv)
+	register float src0 asm("f0") = ray.o.x;
+	register float src1 asm("f1") = ray.o.y;
+	register float src2 asm("f2") = ray.o.z;
+	register float src3 asm("f3") = ray.t_min;
+	register float src4 asm("f4") = ray.d.x;
+	register float src5 asm("f5") = ray.d.y;
+	register float src6 asm("f6") = ray.d.z;
+	register float src7 asm("f7") = ray.t_max;
+
+	register float src8 asm("f8") = sphere.center.x;
+	register float src9 asm("f9") = sphere.center.y;
+	register float src10 asm("f10") = sphere.center.z;
+	register float src11 asm("f11") = sphere.radius;
+
+	float t;
+	asm volatile(".insn u 0xb, %0, 0x18\n\t"
+		: "=f" (t)
+		: "f" (src0), "f" (src1), "f" (src2), "f" (src3),
+		"f" (src4), "f" (src5), "f" (src6), "f" (src7),
+		"f" (src8), "f" (src9), "f" (src10), "f" (src11));
+	return t;
+#else
+	return intersect_sphere(ray, sphere);
+#endif
+}

@@ -352,3 +352,16 @@ inline void pregen_rays(const N* nodes, const P* prims, rtm::Mesh& mesh, uint fr
 }
 
 #endif
+
+inline float intersect_sphere(const rtm::Ray& ray, const Sphere& sphere)
+{
+	rtm::vec3 oc = ray.o - sphere.center;
+	float a = rtm::dot(ray.d, ray.d);
+	float b = 2.0f * rtm::dot(oc, ray.d);
+	float c = rtm::dot(oc, oc) - sphere.radius * sphere.radius;
+	float disc = b * b - 4.0f * a * c;
+	if (disc < 0.0f) return ray.t_max;
+	float t = (-b - sqrtf(disc)) / (2.0f * a);
+	if (t < ray.t_min || t > ray.t_max) return ray.t_max;
+	return t;
+}
