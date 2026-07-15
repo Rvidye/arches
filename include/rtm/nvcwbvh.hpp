@@ -30,6 +30,7 @@ public:
 #ifndef __riscv
 	std::vector<Node> nodes;
 	std::vector<FTB> ftbs;
+	rtm::BVH base_bvh; // base binary BVH for refit/rebuild
 
 	HE2CWBVH(Mesh& mesh, const char* cache_path = "", uint preset = 0, bool merge = false)
 	{
@@ -39,118 +40,128 @@ public:
 		args.width = WIDTH;
 		args.build_method = BVH::SAH;
 
-		if(merge)
+		if (merge)
 		{
 			args.max_prims_merge = BVH::MAX_FTB;
 			args.merge_nodes = true;
 			args.merge_leafs = true;
 		}
 
-		if(preset == 0)
+		if (preset == 0)
 		{
 			args.leaf_cost = BVH::LINEAR;
 			args.max_prims_collapse = 3;
 			args.collapse_method = BVH::DYNAMIC;
 		}
 
-		if(preset == 1)
+		if (preset == 1)
 		{
 			args.leaf_cost = BVH::LINEAR;
 			args.max_prims_collapse = BVH::MAX_FTB;
 			args.collapse_method = BVH::DYNAMIC;
 		}
 
-		if(preset == 2)
+		if (preset == 2)
 		{
 			args.leaf_cost = sizeof(FTB) / sizeof(Node);
 			args.max_prims_collapse = BVH::MAX_FTB;
 			args.collapse_method = BVH::DYNAMIC;
 		}
 
-		if(preset == 3)
+		if (preset == 3)
 		{
 			args.leaf_cost = sizeof(FTB) / sizeof(Node);
 			args.max_prims_collapse = BVH::MAX_FTB;
 			args.collapse_method = BVH::GREEDY;
 			args.merge_leafs = false;
 		}
+		base_bvh = rtm::BVH(mesh, args);
+		_compress(mesh);
+}
 
-		rtm::BVH bvh(mesh, args);
+HE2CWBVH() = default;
 
-		printf("NVCWBVH%d: Building\n", WIDTH);
+void refit(Mesh& mesh) { base_bvh.refit(mesh); _compress(mesh); }
 
-		std::vector<uint> assignments(bvh.nodes.size(), ~0u);
-		assignments[0] = 0; //assign the bvh root node to the compressed root node
-		nodes.emplace_back();
+void _compress(Mesh& mesh)
+{
+	rtm::BVH& bvh = base_bvh;
+	nodes.clear();
+	ftbs.clear();
+	printf("NVCWBVH%d: Building\n", WIDTH);
 
-		uint last_ptr = ~0u;
-		for(uint i = 0; i < bvh.nodes.size(); ++i)
+	std::vector<uint> assignments(bvh.nodes.size(), ~0u);
+	assignments[0] = 0; //assign the bvh root node to the compressed root node
+	nodes.emplace_back();
+
+	uint last_ptr = ~0u;
+	for(uint i = 0; i < bvh.nodes.size(); ++i)
+	{
+		const BVH::Node& bvh_node = bvh.nodes[i];
+		if(bvh_node.ptr.raw == last_ptr) continue;
+		last_ptr = bvh_node.ptr.raw;
+
+		if(bvh_node.ptr.is_int)
 		{
-			const BVH::Node& bvh_node = bvh.nodes[i];
-			if(bvh_node.ptr.raw == last_ptr) continue;
-			last_ptr = bvh_node.ptr.raw;
+			const BVH::Node* children = &bvh.nodes[bvh_node.ptr.child_idx];
+			uint* child_assignments = &assignments[bvh_node.ptr.child_idx];
 
-			if(bvh_node.ptr.is_int)
+			uint last_child_ptr = ~0u;
+			for(uint j = 0; j < bvh_node.ptr.child_cnt; ++j)
 			{
-				const BVH::Node* children = &bvh.nodes[bvh_node.ptr.child_idx];
-				uint* child_assignments = &assignments[bvh_node.ptr.child_idx];
-
-				uint last_child_ptr = ~0u;
-				for(uint j = 0; j < bvh_node.ptr.child_cnt; ++j)
+				if(children[j].ptr.raw == last_child_ptr)
 				{
-					if(children[j].ptr.raw == last_child_ptr)
-					{
-						child_assignments[j] = child_assignments[j - 1];
-						continue;
-					}
-
-					if(children[j].ptr.is_int)
-					{
-						child_assignments[j] = nodes.size();
-						nodes.emplace_back();
-					}
-					else
-					{
-						child_assignments[j] = ftbs.size();
-						ftbs.emplace_back();
-					}
-
-					last_child_ptr = children[j].ptr.raw;
+					child_assignments[j] = child_assignments[j - 1];
+					continue;
 				}
 
-				if(!compress(children, child_assignments, bvh_node.ptr.child_cnt, nodes[assignments[i]]))
-					printf("Error could not compress %d\n", i);
-			}
-			else
-			{
-				if(!::rtm::compress(bvh_node.ptr.prim_idx, bvh_node.ptr.prim_cnt, mesh, &ftbs[assignments[i]]))
-					printf("Error could not compress leaf %d\n", i);
-			}
-		}
+				if(children[j].ptr.is_int)
+				{
+					child_assignments[j] = nodes.size();
+					nodes.emplace_back();
+				}
+				else
+				{
+					child_assignments[j] = ftbs.size();
+					ftbs.emplace_back();
+				}
 
-		uint histo[FTB::MAX_TRIS]; uint total_tris = 0;
-		for(uint i = 0; i < FTB::MAX_TRIS; ++i) histo[i] = 0;
-		for(uint i = 0; i < ftbs.size(); ++i)
+				last_child_ptr = children[j].ptr.raw;
+			}
+
+			if(!compress(children, child_assignments, bvh_node.ptr.child_cnt, nodes[assignments[i]]))
+				printf("Error could not compress %d\n", i);
+		}
+		else
 		{
-			histo[ftbs[i].tri_cnt]++;
-			total_tris += ftbs[i].tri_cnt + 1;
+			if(!::rtm::compress(bvh_node.ptr.prim_idx, bvh_node.ptr.prim_cnt, mesh, &ftbs[assignments[i]]))
+				printf("Error could not compress leaf %d\n", i);
 		}
-
-		size_t internal_size = sizeof(Node) * nodes.size();
-		size_t leaf_size = sizeof(FTB) * ftbs.size();
-		size_t total_size = internal_size + leaf_size;
-		printf("NVCWBVH%d: Node Size:  %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)internal_size / (1 << 20), (float)internal_size / total_tris);
-		printf("NVCWBVH%d: Leaf Size:  %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)leaf_size / (1 << 20), (float)leaf_size / total_tris);
-		printf("NVCWBVH%d: Total Size: %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)total_size / (1 << 20), (float)total_size / total_tris);
-
-		//printf("NVCWBVH%d: Leaf Fullness: %.2f\n", WIDTH, (float)total_tris / ftbs.size());
-		//for(uint i = 0; i < FTB::MAX_TRIS; ++i)
-		//{
-		//	float precent = 100.0f * histo[i] / ftbs.size();
-		//	printf("%02d: %5.1f%% %.*s\n", i + 1, precent, (uint)std::round(precent),
-		//		"....................................................................................................");
-		//}
 	}
+
+	uint histo[FTB::MAX_TRIS]; uint total_tris = 0;
+	for(uint i = 0; i < FTB::MAX_TRIS; ++i) histo[i] = 0;
+	for(uint i = 0; i < ftbs.size(); ++i)
+	{
+		histo[ftbs[i].tri_cnt]++;
+		total_tris += ftbs[i].tri_cnt + 1;
+	}
+
+	size_t internal_size = sizeof(Node) * nodes.size();
+	size_t leaf_size = sizeof(FTB) * ftbs.size();
+	size_t total_size = internal_size + leaf_size;
+	printf("NVCWBVH%d: Node Size:  %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)internal_size / (1 << 20), (float)internal_size / total_tris);
+	printf("NVCWBVH%d: Leaf Size:  %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)leaf_size / (1 << 20), (float)leaf_size / total_tris);
+	printf("NVCWBVH%d: Total Size: %6.1f MiB (%4.1f B/tri)\n", WIDTH, (float)total_size / (1 << 20), (float)total_size / total_tris);
+
+	//printf("NVCWBVH%d: Leaf Fullness: %.2f\n", WIDTH, (float)total_tris / ftbs.size());
+	//for(uint i = 0; i < FTB::MAX_TRIS; ++i)
+	//{
+	//	float precent = 100.0f * histo[i] / ftbs.size();
+	//	printf("%02d: %5.1f%% %.*s\n", i + 1, precent, (uint)std::round(precent),
+	//		"....................................................................................................");
+	//}
+}
 
 	static bool compress(const BVH::Node* nodes, const uint* indices, uint node_cnt, HE2CWBVH::Node& cwnode)
 	{

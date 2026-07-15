@@ -141,6 +141,8 @@ const static std::vector<SceneConfig> scene_configs =
 	{"bistro-interior", rtm::vec3(-0.813307f, 2.0811f, -1.28115f), rtm::vec3(-0.813307f + 1.0f, 2.0811f, -1.28115f), 24.0f}, //CRYTEC SPONZA
 
 	{"intel-sponza", rtm::vec3(-900.6f, 150.8f, 120.74f), rtm::vec3(79.7f, 14.0f, -17.4f), 12.0f}, //INTEL SPONZA
+
+	{"intel-sponza1", rtm::vec3(1.0f, 1.0f, 0.0f), rtm::vec3(-1.0f, 1.0f, 0.0f), 12.0f}, //INTEL SPONZA1
 	
 	{"sponza", rtm::vec3(0.0f, 2.0f, 0.0f), rtm::vec3(90.0f, 0.0f, -1.0f), 12.0f}, // SPONZA
 	
@@ -149,6 +151,12 @@ const static std::vector<SceneConfig> scene_configs =
 	{"hairball", rtm::vec3(0, 0, 10), rtm::vec3(0, 0, 0), 24.0f}, //HAIRBALL
 
 	{"bistro", rtm::vec3(-8.0, 2.0, 2.0), rtm::vec3(0.0f, 1.0f, -1.0f), 12.0f}, //BISTRO
+
+	//animated scenes
+	{"wooddoll", rtm::vec3(0.0f, 0.0f, 0.5f),   rtm::vec3(0.0f, 0.5f, -1.0f),   12.0f},
+	{"ben",      rtm::vec3(0.0f, 0.348f, 1.114f),   rtm::vec3(0.0f, 0.348f, -0.002f),   12.0f},
+	{"hand",     rtm::vec3(-0.005f, 0.314f, 1.087f), rtm::vec3(-0.005f, 0.314f, -0.220f), 12.0f},
+	{"marbles",  rtm::vec3(0.0f, 297.74f, 813.3f),  rtm::vec3(0.0f, 297.74f, -0.002f),  12.0f},
 };
 
 
@@ -226,6 +234,14 @@ public:
 		set_param("pregen-bounce", 1);
 		set_param("bvh-preset", 0);
 		set_param("bvh-merging", 0);
+		
+		//Keyframe animation: load datasets/<scene>/<scene>_NNN.obj poses and interpolate. 
+		//Procedural fallback: deform-mode. anim-strategy selects rebuild vs refit.
+		set_param("anim-strategy", "");    // "" | "rebuild" | "refit"
+		set_param("deform-mag", 0.0f);     // procedural deform amount in [0,1] (0 = rest)
+		set_param("deform-mode", "twist"); // twist | explode | sine
+		set_param("anim-frames", 0);       // >0 => keyframe animation (total rendered frames)
+		set_param("anim-frame", 0);        // which frame index in [0, anim-frames-1]
 
 		for(uint i = 1; i < argc; ++i)
 		{

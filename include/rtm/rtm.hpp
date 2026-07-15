@@ -22,6 +22,7 @@
 #include "camera.hpp"
 
 #include "mesh.hpp"
+#include "anim.hpp"
 #include "dgf.hpp"
 #include "ftb.hpp"
 #include "qtb.hpp"

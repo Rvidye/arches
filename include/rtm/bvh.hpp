@@ -215,6 +215,19 @@ public:
 		if(!args.silent) _print_stats_wbvh();
 	}
 
+	void refit(const Mesh& mesh)
+	{
+		std::vector<BuildObject> bld_objs(mesh.size());
+		for (uint i = 0; i < mesh.size(); ++i)
+		{
+			bld_objs[i].aabb = mesh.get_triangle(i).aabb();
+			bld_objs[i].index = i;
+			bld_objs[i].cost = 1.0f;
+		}
+		_refit(bld_objs);
+		sah_cost = _compute_cost(bld_objs);
+	}
+
 private:
 	static void _get_build_objs(const Mesh& mesh, std::vector<BuildObject>& bld_objs)
 	{

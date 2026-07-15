@@ -6,6 +6,7 @@
 #include "trax-kernel/include.hpp"
 #include "trax-kernel/intersect.hpp"
 #include "units/unit-texture.hpp"
+#include "rtm/anim.hpp"
 
 namespace Arches {
 
@@ -146,6 +147,21 @@ typedef Units::UnitCache UnitL2Cache;
 typedef Units::UnitCache UnitL1Cache;
 typedef rtm::FTB PrimBlocks;
 typedef Units::TRaX::UnitRTCore<rtm::CWBVH::Node, PrimBlocks> UnitRTCore;
+
+struct AnimInfo
+{
+	bool        animate{ false };
+	std::string strategy{ "static" }; //static | rebuild | refit
+	std::string mode{ "twist" };       //deform mode, or "keyframe:<scene>" for keyframe animation
+	float       mag{ 0.0f };           //procedural deform magnitude (0 for keyframe)
+	int         frame{ 0 };            //keyframe animation: rendered frame index
+	float       t{ 0.0f };             //keyframe animation: interpolation position in [0, num_keys-1]
+	float       sah{ 0.0f };       //host-side BVH quality (SAH cost) for context
+	size_t      node_bytes{ 0 };
+	size_t      leaf_bytes{ 0 };
+	double      build_ms{ 0.0 };   //host-side build/refit time (NOT simulated)
+};
+static AnimInfo g_anim;
 
 static TRaXKernelArgs initilize_buffers(Units::UnitMainMemoryBase** drams, const Units::UnitCrossbar& xbar, paddr_t& heap_address, const SimulationConfig& sim_config, uint page_size)
 {
@@ -793,7 +809,7 @@ static void run_sim_trax(SimulationConfig& sim_config)
 	printf("MSIPS: %.2f\n", simulator.current_cycle * tps.size() / simulation_time / 1'000'000.0);
 
 	stbi_flip_vertically_on_write(true);
-	stbi_write_png("out.png", (int)kernel_args.framebuffer_width, (int)kernel_args.framebuffer_height, 4, vec_mem.data() + (size_t)kernel_args.framebuffer, 0);
+	stbi_write_png("arches-out.png", (int)kernel_args.framebuffer_width, (int)kernel_args.framebuffer_height, 4, vec_mem.data() + (size_t)kernel_args.framebuffer, 0);
 
 	for(auto& tp : tps) delete tp;
 	for(auto& sfu : sfus) delete sfu;
