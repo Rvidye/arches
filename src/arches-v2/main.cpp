@@ -183,9 +183,55 @@ static TRaXKernelArgs initilize_buffers(Units::UnitMainMemoryBase** drams, const
 
 	args.light_dir = rtm::normalize(rtm::vec3(4.5f, 42.5f, 5.0f));
 	args.camera = sim_config.camera;
+	
+	// Change mesh loading in arches for keyframe animated scenes
+	int         anim_frames = sim_config.get_int("anim-frames"); //keyframe sequence
+	int         anim_frame = sim_config.get_int("anim-frame");
+	std::string anim_strategy = sim_config.get_string("anim-strategy");
+	float       deform_mag = sim_config.get_float("deform-mag");
+	std::string deform_mode = sim_config.get_string("deform-mode");
+	bool        keyframe_anim = anim_frames > 0;
+	bool        animate = keyframe_anim || !anim_strategy.empty() || deform_mag != 0.0f;
 
-	rtm::Mesh mesh(datasets_folder + scene_name + ".obj");
-	rtm::CWBVH bvh(mesh, (cache_folder + scene_name + ".bvh").c_str(), sim_config.get_int("bvh-preset"), sim_config.get_int("bvh-merging"));
+	rtm::KeyFrameAnim anim;
+	float anim_t = 0.0f;
+	if (keyframe_anim)
+	{
+		anim.init(datasets_folder + scene_name + "/", scene_name + "_");
+		anim_t = (anim_frames > 1) ? (float)(anim_frame < 0 ? 0 : anim_frame) / (anim_frames - 1) * (anim.count - 1) : 0.0f;
+	}
+
+	std::string base_obj = keyframe_anim ? anim.path(0) : (datasets_folder + scene_name + ".obj");
+	rtm::Mesh mesh(base_obj);
+	if (mesh.size() == 0)
+	{
+		fprintf(stderr,
+			"\nFATAL: scene '%s' loaded 0 triangles from '%s'.\n"
+			"       The file is missing, empty, or not a readable OBJ.\n"
+			"       Keyframe scenes live in <dataset-dir>/<scene>/<scene>_NNN.obj and need --anim-frames>0;\n"
+			"       static scenes live at <dataset-dir>/<scene>.obj.\n",
+			scene_name.c_str(), base_obj.c_str());
+		std::exit(2);
+	}
+
+	//Move the mesh to the requested pose: keyframe interpolation, or procedural deform.
+	auto apply_pose = [&](rtm::Mesh& m) { if (keyframe_anim) anim.sample(anim_t, m); else rtm::deform_mesh(m, deform_mode, deform_mag); };
+
+	//Bypass the .bvh disk cache while animating, or every pose would reuse frame 0's cached hierarchy.
+	std::string bvh_cache = animate ? std::string("") : (cache_folder + scene_name + ".bvh");
+
+	rtm::CWBVH bvh;
+	if (animate && anim_strategy == "refit")
+	{
+		bvh = rtm::CWBVH(mesh, bvh_cache.c_str(), sim_config.get_int("bvh-preset"), sim_config.get_int("bvh-merging"));
+		apply_pose(mesh);
+		bvh.refit(mesh);
+	}
+	else
+	{
+		if (animate) apply_pose(mesh);
+		bvh = rtm::CWBVH(mesh, bvh_cache.c_str(), sim_config.get_int("bvh-preset"), sim_config.get_int("bvh-merging"));
+	}
 
 	std::vector<rtm::Ray> rays(args.framebuffer_size);
 	if(args.pregen_rays)

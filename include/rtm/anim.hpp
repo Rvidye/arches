@@ -2,7 +2,7 @@
 
 #include "mesh.hpp"
 
-#ifndef __resicv
+#ifndef __riscv
 
 #include<string>
 #include<fstream>

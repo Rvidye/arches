@@ -113,6 +113,7 @@ inline static void kernel(const TRaXKernelArgs& args)
 			uint32_t mat_id = args.material_indices[hit.id];
 			rtm::Material& mat = args.materials[mat_id];
 			rtm::uvec3 tci = args.tex_coord_indices[hit.id];
+			rtm::uvec3 vi = args.vertex_indices[hit.id];
 			rtm::vec2 tc = args.tex_coords[tci[0]] * hit.bc[0] + args.tex_coords[tci[1]] * hit.bc[1] + args.tex_coords[tci[2]] * (1.0f - hit.bc[0] - hit.bc[1]);
 
 			rtm::vec4 albedo;
@@ -122,11 +123,29 @@ inline static void kernel(const TRaXKernelArgs& args)
 			}
 			else
 			{
-				albedo = rtm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+				albedo = rtm::vec4(mat.albedo.x, mat.albedo.y, mat.albedo.z, 1.0f);
 			}
 
-			//args.framebuffer[fb_index] = rtm::RNG::hash(mat.use_am) | 0xff000000;
-			args.framebuffer[fb_index] = encode_pixel(rtm::vec3(albedo.x, albedo.y, albedo.z));
+			// Shading Normal for animated meshes needs to be interpolated via vertex position
+			rtm::vec3 N = rtm::normalize(rtm::cross(args.vertices[vi[1]] - args.vertices[vi[0]], args.vertices[vi[2]] - args.vertices[vi[0]]));
+			if (rtm::dot(N, ray.d) > 0.0f) N = N * -1.0f;
+			if (mat.use_nm)
+			{
+				rtm::vec4 nm = sample2d(&mat.normal_texture, tc);
+				N = rtm::normalize(N + rtm::vec3(nm.x * 2.0f - 1.0f, nm.y * 2.0f - 1.0f, 0.0f) * 0.5f);
+			}
+
+			rtm::vec3 L = args.light_dir;
+			rtm::vec3 V = rtm::normalize(ray.d * -1.0f);
+			rtm::vec3 H = rtm::normalize(L + V);
+			float ndl = rtm::max(rtm::dot(N, L), 0.0f);
+			float ndh = rtm::max(rtm::dot(N, H), 0.0f);
+			float spec = ndh * ndh;
+			spec *= spec;
+			spec *= spec;
+
+			rtm::vec4 color = albedo * (0.15f + 0.85f * ndl) + rtm::vec4(0.3f,0.3f,0.3f,1.0f) * spec;
+			args.framebuffer[fb_index] = encode_pixel(rtm::vec3(color.r, color.g, color.b));
 		}
 		else
 		{
@@ -224,6 +243,10 @@ int main(int argc, char* argv[])
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 50.0f, rtm::vec3(-0.005f, 0.314f, 1.087f), rtm::vec3(-0.005f, 0.314f, -0.220f));
 	if (scene_name.compare("marbles") == 0)
 		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 50.0f, rtm::vec3(0.0f, 297.74f, 813.3f), rtm::vec3(0.0f, 297.74f, -0.002f));
+	if (scene_name.compare("knight") == 0)
+		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 24.0f, rtm::vec3(-300.0f, 0.0f, 0.0f), rtm::vec3(0.0f, 100.0, 0.0f));
+	if (scene_name.compare("cesiumman") == 0)
+		args.camera = rtm::Camera(args.framebuffer_width, args.framebuffer_height, 24.0f, rtm::vec3(0.0f, 0.0f, 3.0f), rtm::vec3(0.0f, 1.0, 0.0f));
 
 	std::string mesh_path = "datasets/" + scene_name + ".obj";
 	std::string bvh_cache_path = "datasets/cache/" + scene_name + ".bvh";

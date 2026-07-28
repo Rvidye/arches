@@ -157,6 +157,7 @@ const static std::vector<SceneConfig> scene_configs =
 	{"ben",      rtm::vec3(0.0f, 0.348f, 1.114f),   rtm::vec3(0.0f, 0.348f, -0.002f),   12.0f},
 	{"hand",     rtm::vec3(-0.005f, 0.314f, 1.087f), rtm::vec3(-0.005f, 0.314f, -0.220f), 12.0f},
 	{"marbles",  rtm::vec3(0.0f, 297.74f, 813.3f),  rtm::vec3(0.0f, 297.74f, -0.002f),  12.0f},
+	{"cesiumman",  rtm::vec3(0.0f, 0.0f, 3.0f),  rtm::vec3(0.0f, 1.0, 0.0f),  24.0f},
 };
 
 

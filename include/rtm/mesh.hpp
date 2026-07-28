@@ -23,6 +23,7 @@ struct Material
 	uint8_t use_rm : 1;
 	uint8_t use_mm : 1;
 	Texture2D albedo_texture;
+	Texture2D normal_texture;
 	rtm::vec3 albedo;
 	float roughness;
 	float metalness;
@@ -65,14 +66,15 @@ public:
 	std::vector<Material> materials;
 
 public:
-	Mesh(std::string file_path) : mtl_lib("")
+	Mesh() = default; // empty mesh used as a persistent buffer for cross-frame animation loop
+	Mesh(std::string file_path, bool load_texture = true) : mtl_lib("")
 	{
  		if(!load_obj(file_path.c_str()))
 		{
 			printf("Mesh: failed to load mesh OBJ file %s\n", file_path.c_str());
 			return;
 		}
-		if(mtl_lib.length() > 0)
+		if(load_texture && mtl_lib.length() > 0)
 		{
 			std::string parent_folder = parent_path(file_path);
 			if (!load_mtl(swap_path(mtl_lib, parent_folder), parent_folder + "textures/"))
@@ -456,7 +458,7 @@ public:
 
 			case Ns:
 			{
-				float ns = read_vec3(data)[0];
+				float ns = read_vec3(data + index)[0];
 				float roughness = 1.0f - sqrtf(ns / 1000.0f);
 				if(!materials.back().use_rm)
 					materials.back().roughness = roughness;
@@ -465,7 +467,7 @@ public:
 
 			case Kd:
 			{
-				rtm::vec3 kd = read_vec3(data);
+				rtm::vec3 kd = read_vec3(data + index);
 				if(!materials.back().use_am)
 					materials.back().albedo = kd;
 				break;
@@ -473,7 +475,7 @@ public:
 
 			case Ke:
 			{
-				rtm::vec3 ke = read_vec3(data);
+				rtm::vec3 ke = read_vec3(data + index);
 				if(rtm::length2(ke) > 0.0f)
 				{
 					materials.back().model = Material::EMISSIVE;
@@ -515,6 +517,13 @@ public:
 					std::string str = swap_path(read_str(data, index), texture_path);
 					materials.back().albedo_texture = Texture2D(str);
 					materials.back().use_am = 1;
+				}
+				else if(data[index - 2] == 'p') //map_Bump
+				{
+					if (data[index] == '-') { index += 4; while (data[index++] != ' '); }
+					std::string str = swap_path(read_str(data, index), texture_path);
+					materials.back().normal_texture = Texture2D(str);
+					materials.back().use_nm = 1;
 				}
 				//else if(data[index - 2] == 's') //map_Ns
 				//{
