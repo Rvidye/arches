@@ -166,16 +166,24 @@ class GenericDRAMControllerA final : public IDRAMController, public Implementati
         is_success = m_read_buffer.enqueue(req);
       } else if (req.type_id == Request::Type::Write) {
           // write merge
+          bool merged = false;
           for (auto itr = m_write_buffer.begin(); itr != m_write_buffer.end(); ++itr)
           {
               if (req.addr == itr->addr)
               {
                   is_success = true;
+                  merged = true;
                   break;
               }
           }
-          if (!is_success)
+          //A merged write is absorved and never reaches the retirement path in tick(), so arches is told to retire here
+          if (merged)
+          {
+              if (req.callback) req.callback(req);
+          }
+          else {
             is_success = m_write_buffer.enqueue(req);
+          }
       } else {
         throw std::runtime_error("Invalid request type!");
       }
@@ -255,6 +263,8 @@ class GenericDRAMControllerA final : public IDRAMController, public Implementati
             pending.push_back(*req_it);
           } else if (req_it->type_id == Request::Type::Write) {
             // TODO: Add code to update statistics
+            // Writes never enter the read-completion queue. Issuing the final command is treated as contoller retirement and reported to Arches
+              if (req_it->callback) req_it->callback(*req_it);
           }
           buffer->remove(req_it);
         } else {
