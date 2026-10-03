@@ -25,15 +25,13 @@ public:
 	bool deserialize(std::string file_path, const UnitMainMemoryBase& main_mem);
 	void direct_write(paddr_t block_addr, uint8_t* data);
 
-	//Untimed, after a frame: passes every dirty sector to write(sector address, data, size) and
-	//marks it clean, so the host can read results from memory. Returns the number of sectors.
 	uint64_t flush_dirty(const std::function<void(paddr_t, const uint8_t*, uint)>& write);
 
 protected:
 	struct BlockMetaData
 	{
 		uint64_t tag     : 47;
-		uint64_t pinned  : 1; //no-evict: never chosen as a victim until released
+		uint64_t pinned  : 1; //no-evict never chosen as a victim until released
 		uint64_t lru     : 8;
 		uint64_t dirty   : 4;
 		uint64_t valid   : 4;
