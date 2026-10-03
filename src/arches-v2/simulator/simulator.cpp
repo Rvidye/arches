@@ -35,6 +35,15 @@ void Simulator::new_unit_group()
 #define UNIT_LOOP_END }
 #endif
 
+// single threaded after a full clock pass.
+// unit publish their busy state during their own clock phases, so a unit handed work by another group in the same cycle is only visible here.
+bool Simulator::_any_unit_has_work()
+{
+	for (uint i = 0; i < _units.size(); ++i)
+		if (_units[i]->has_work()) return true;
+	return false;
+}
+
 void Simulator::execute(uint delta, std::function<void()> interval_logger)
 {
 #ifdef USE_TBB
@@ -64,8 +73,7 @@ void Simulator::execute(uint delta, std::function<void()> interval_logger)
 			if(delta != 0 && current_cycle % delta == 0)
 				interval_logger();
 		}
-		while(units_executing > 0);
-
+		while(units_executing > 0 || _any_unit_has_work());
 #ifdef USE_TBB
 	});
 #endif

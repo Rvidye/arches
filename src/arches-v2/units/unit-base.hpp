@@ -17,6 +17,8 @@ public:
 	virtual void clock_rise() = 0;
 	virtual void clock_fall() = 0;
 	virtual void reset() {};
+	// simulator keeps clocking untill no unit reports work, so frames cannot end while a transaction is still in memory system.
+	virtual bool has_work() { return false; }
 };
 
 }}
