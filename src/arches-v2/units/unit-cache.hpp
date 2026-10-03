@@ -78,6 +78,10 @@ protected:
 	struct MSHR //Miss Status Handling Register
 	{
 		std::queue<MemoryRequest> subentries;
+		bool filled{ false };
+		bool has_store{ false };
+		uint8_t sector[MemoryRequest::MAX_SIZE];
+		std::queue<MemoryReturn> ready;
 		MSHR() = default;
 	};
 
@@ -91,6 +95,9 @@ protected:
 
 		std::queue<MemoryRequest> mem_higher_request_queue;
 		uint mem_higher_port;
+
+		std::unordered_map<paddr_t, uint> misses_pending;
+		std::unordered_map<paddr_t, uint> stores_pending;
 
 		Slice(Configuration config);
 	};
@@ -116,13 +123,19 @@ protected:
 	void _recive_request();
 	void _send_request();
 
+	//Allocates the block holding sector_addr and queues a write-back of the victim's dirty sectors.
+	void _allocate(paddr_t sector_addr, Slice& slice);
+	void _write_back(paddr_t sector_addr, const uint8_t* data, Slice& slice);
+	void _apply_subentries(MSHR& mshr, paddr_t sector_addr, Slice& slice);
+	static void _count_down(std::unordered_map<paddr_t, uint>& counts, paddr_t sector_addr);
+
 	virtual UnitMemoryBase* _get_mem_higher(paddr_t addr) { return _mem_highers[0]; }
 
 public:
 	class Log
 	{
 	public:
-		const static uint NUM_COUNTERS = 10;
+		const static uint NUM_COUNTERS = 14;
 		union
 		{
 			struct
@@ -136,6 +149,11 @@ public:
 				uint64_t tag_array_access;
 				uint64_t data_array_reads;
 				uint64_t data_array_writes;
+				uint64_t stores;
+				uint64_t store_hits;
+				uint64_t store_allocates;
+				uint64_t writebacks;
+				uint64_t releases;
 			};
 			uint64_t counters[NUM_COUNTERS];
 		};
@@ -179,6 +197,13 @@ public:
 			printf("Tag Array Access: %lld\n", tag_array_access / units);
 			printf("Data Array Reads: %lld\n", data_array_reads / units);
 			printf("Data Array Writes: %lld\n", data_array_writes / units);
+			if(stores + writebacks + releases > 0)
+			{
+				printf("\n");
+				printf("Stores: %lld (hits %lld, whole-sector allocates %lld)\n", stores / units, store_hits / units, store_allocates / units);
+				printf("Dirty sectors written back: %lld\n", writebacks / units);
+				printf("No-evict blocks released: %lld\n", releases / units);
+			}
 		}
 
 		void print_short(cycles_t cycles, uint units = 1)

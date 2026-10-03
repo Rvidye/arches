@@ -11,6 +11,7 @@ UnitCacheBase::UnitCacheBase(size_t size, uint block_size, uint associativity, u
 	{
 		_tag_array[i].valid = 0;
 		_tag_array[i].dirty = 0;
+		_tag_array[i].pinned = 0;
 		_tag_array[i].lru = i % associativity;
 		_tag_array[i].tag = ~0x0ull;
 	}
@@ -143,6 +144,115 @@ uint8_t* UnitCacheBase::_write_sector(paddr_t sector_addr, const uint8_t* data, 
 	return nullptr;
 }
 
+bool UnitCacheBase::_pin(paddr_t paddr)
+{
+	const uint64_t tag = _get_tag(paddr);
+	const uint start = _get_set_index(paddr) * _associativity;
+	for(uint i = start; i < start + _associativity; ++i)
+		if(_tag_array[i].tag == tag)
+		{
+			_tag_array[i].pinned = 1;
+			return true;
+		}
+	return false;
+}
+
+bool UnitCacheBase::_release(paddr_t paddr)
+{
+	const uint64_t tag = _get_tag(paddr);
+	const uint start = _get_set_index(paddr) * _associativity;
+	for(uint i = start; i < start + _associativity; ++i)
+		if(_tag_array[i].tag == tag)
+		{
+			_tag_array[i].pinned = 0;
+			_tag_array[i].valid = 0;
+			_tag_array[i].dirty = 0;
+			return true;
+		}
+	return false;
+}
+
+uint64_t UnitCacheBase::flush_dirty(const std::function<void(paddr_t, const uint8_t*, uint)>& write)
+{
+	uint64_t sectors = 0;
+	for(uint i = 0; i < _tag_array.size(); ++i)
+	{
+		BlockMetaData& block = _tag_array[i];
+		const uint64_t dirty = block.dirty & block.valid;
+		if(!dirty) continue;
+		const paddr_t block_addr = _get_block_addr(block.tag, i / _associativity);
+		for(uint s = 0; s < _block_size / _sector_size; ++s)
+			if((dirty >> s) & 0x1)
+			{
+				write(block_addr + s * _sector_size, &_data_array[i * _block_size + s * _sector_size], _sector_size);
+				sectors++;
+			}
+		block.dirty = 0;
+	}
+	return sectors;
+}
+
+uint8_t* UnitCacheBase::_find_sector(paddr_t sector_addr)
+{
+	uint64_t tag = _get_tag(sector_addr);
+	uint set_index = _get_set_index(sector_addr);
+	uint sector_index = _get_sector_index(sector_addr);
+	uint start = set_index * _associativity;
+	uint end = start + _associativity;
+
+	for(uint i = start; i < end; ++i)
+		if (_tag_array[i].tag == tag)
+		{
+			if (!((_tag_array[i].valid >> sector_index) & 0x1)) return nullptr;
+			return &_data_array[i * _block_size + sector_index * _sector_size];
+		}
+
+	return nullptr;
+}
+
+bool UnitCacheBase::_merge_sector(paddr_t sector_addr, uint offset, const uint8_t* data, uint size)
+{
+	_assert(offset + size <= _sector_size);
+	uint64_t tag = _get_tag(sector_addr);
+	uint set_index = _get_set_index(sector_addr);
+	uint sector_index = _get_sector_index(sector_addr);
+	uint start = set_index * _associativity;
+	uint end = start + _associativity;
+
+	for(uint i = start; i < end; ++i)
+		if (_tag_array[i].tag == tag)
+		{
+			if (!((_tag_array[i].valid >> sector_index) & 0x1)) return false;
+			_tag_array[i].dirty |= 0x1ull << sector_index;
+			std::memcpy(&_data_array[i * _block_size + sector_index * _sector_size + offset], data, size);
+			return true;
+		}
+
+	return false;
+}
+
+const uint8_t* UnitCacheBase::_invalidate_sector(paddr_t sector_addr)
+{
+	uint64_t tag = _get_tag(sector_addr);
+	uint set_index = _get_set_index(sector_addr);
+	uint sector_index = _get_sector_index(sector_addr);
+	uint start = set_index * _associativity;
+	uint end = start + _associativity;
+
+	for (uint i = start; i < end; ++i)
+		if (_tag_array[i].tag == tag)
+		{
+			const uint64_t bit = 0x1ull << sector_index;
+			if (!(_tag_array[i].valid & bit)) return nullptr;
+			const bool dirty = _tag_array[i].dirty & bit;
+			_tag_array[i].valid &= ~bit;
+			_tag_array[i].dirty &= ~bit;
+			return dirty ? &_data_array[i * _block_size + sector_index * _sector_size] : nullptr;
+		}
+
+	return nullptr;
+}
+
 //inserts cacheline associated with paddr replacing least recently used. Assumes cachline isn't already in cache if it is this has undefined behaviour
 UnitCacheBase::Victim UnitCacheBase::_allocate_block(paddr_t block_addr)
 {
@@ -181,6 +291,17 @@ UnitCacheBase::Victim UnitCacheBase::_allocate_block(paddr_t block_addr)
 				replacement_index = i;
 				break;
 			}
+
+		//A pinned (no-evict) block is never a victim: take the least recently used unpinned one.
+		if(_tag_array[replacement_index].pinned)
+		{
+			replacement_index = ~0u;
+			for(uint i = start; i < end; ++i)
+				if(!_tag_array[i].pinned && (replacement_index == ~0u || _tag_array[i].lru > _tag_array[replacement_index].lru))
+					replacement_index = i;
+			_assert(replacement_index != ~0u); //every way pinned: the no-evict data does not fit in this cache
+			replacement_lru = _tag_array[replacement_index].lru;
+		}
 	}
 
 	//check for victim block
@@ -206,6 +327,7 @@ UnitCacheBase::Victim UnitCacheBase::_allocate_block(paddr_t block_addr)
 		_tag_array[replacement_index].tag = tag;
 		_tag_array[replacement_index].valid = 0;
 		_tag_array[replacement_index].dirty = 0;
+		_tag_array[replacement_index].pinned = 0;
 	}
 
 	return victim;

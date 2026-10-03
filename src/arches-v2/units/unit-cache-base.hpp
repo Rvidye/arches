@@ -25,10 +25,15 @@ public:
 	bool deserialize(std::string file_path, const UnitMainMemoryBase& main_mem);
 	void direct_write(paddr_t block_addr, uint8_t* data);
 
+	//Untimed, after a frame: passes every dirty sector to write(sector address, data, size) and
+	//marks it clean, so the host can read results from memory. Returns the number of sectors.
+	uint64_t flush_dirty(const std::function<void(paddr_t, const uint8_t*, uint)>& write);
+
 protected:
 	struct BlockMetaData
 	{
-		uint64_t tag     : 48;
+		uint64_t tag     : 47;
+		uint64_t pinned  : 1; //no-evict: never chosen as a victim until released
 		uint64_t lru     : 8;
 		uint64_t dirty   : 4;
 		uint64_t valid   : 4;
@@ -53,6 +58,13 @@ protected:
 	uint8_t* _read_sector(paddr_t sector_addr);
 	uint8_t* _write_sector(paddr_t sector_addr, const uint8_t* data, bool set_dirty = false);
 	Victim _allocate_block(paddr_t block_addr);
+
+	uint8_t* _find_sector(paddr_t sector_addr);
+	bool _merge_sector(paddr_t sector_addr, uint offset, const uint8_t* data, uint size);
+	const uint8_t* _invalidate_sector(paddr_t sector_addr);
+
+	bool _pin(paddr_t paddr);
+	bool _release(paddr_t paddr);
 
 	paddr_t _get_sector_index(paddr_t paddr) { return _get_block_offset(paddr) / _sector_size; }
 	paddr_t _get_sector_offset(paddr_t paddr) { return paddr & _sector_offset_bits; }

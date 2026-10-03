@@ -46,7 +46,61 @@ bool UnitCache::has_work()
 			if (!bank.request_pipline.empty() || !bank.return_pipline.empty() || bank.return_queue.is_read_valid())
 				return true;
 	}
+
 	return _request_network.has_pending() || _return_network.has_pending();
+}
+
+void UnitCache::_allocate(paddr_t sector_addr, Slice& slice)
+{
+	const Victim victim = _allocate_block(sector_addr);
+	if (!victim.dirty) return;
+	for (uint i = 0; i < _block_size / _sector_size; ++i)
+		if ((victim.dirty >> i) & 0x1)
+			_write_back(victim.addr + i * _sector_size, victim.data + i * _sector_size, slice);
+}
+
+//Queued with the fills, so the next level sees it before any later fetch of the same sector.
+void UnitCache::_write_back(paddr_t sector_addr, const uint8_t* data, Slice& slice)
+{
+	MemoryRequest request;
+	request.type = MemoryRequest::Type::STORE;
+	request.size = _sector_size;
+	request.paddr = sector_addr;
+	request.port = slice.mem_higher_port;
+	std::memcpy(request.data, data, _sector_size);
+	slice.mem_higher_request_queue.push(request);
+	log.writebacks++;
+}
+
+//copy of the sector and into the cache
+void UnitCache::_apply_subentries(MSHR& mshr, paddr_t sector_addr, Slice& slice)
+{
+	while (!mshr.subentries.empty())
+	{
+		const MemoryRequest& sub = mshr.subentries.front();
+		const uint offset = _get_sector_offset(sub.paddr);
+		if (sub.type == MemoryRequest::Type::STORE)
+		{
+			std::memcpy(mshr.sector + offset, sub.data, sub.size);
+			if (!_merge_sector(sector_addr, offset, sub.data, sub.size))
+			{
+				_allocate(sector_addr, slice);
+				_write_sector(sector_addr, mshr.sector, true);
+			}
+			if(sub.flags.no_evict) _pin(sector_addr);
+			_count_down(slice.stores_pending, sector_addr);
+			log.data_array_writes++;
+		}
+		else mshr.ready.push(MemoryReturn(sub, mshr.sector + offset));
+		mshr.subentries.pop();
+	}
+}
+
+void UnitCache::_count_down(std::unordered_map<paddr_t, uint>& counts, paddr_t sector_addr)
+{
+	auto it = counts.find(sector_addr);
+	_assert(it != counts.end());
+	if (--it->second == 0) counts.erase(it);
 }
 
 void UnitCache::_recive_return()
@@ -67,19 +121,33 @@ void UnitCache::_recive_return()
 					uint b = _get_bank(ret.paddr);
 					Bank& bank = slice.banks[b];
 
-					if(!_miss_alloc) _allocate_block(sector_addr);
-					_write_sector(sector_addr, ret.data, false);
-
-					//fill a subentry and queue for return
-					if(bank.return_pipline.is_write_valid() && !mshr.subentries.empty())
+					if (!mshr.filled)
 					{
-						MemoryRequest& sube_req = mshr.subentries.front();
-						uint sector_offset = _get_sector_offset(sube_req.paddr);
-						bank.return_pipline.write(MemoryReturn(sube_req, ret.data + sector_offset));
-						mshr.subentries.pop();
+						if (!_miss_alloc) _allocate(sector_addr, slice);
+
+						if (const uint8_t* cached_sector = _find_sector(sector_addr))
+							std::memcpy(mshr.sector, cached_sector, _sector_size);
+						else
+						{
+							if (!_write_sector(sector_addr, ret.data, false) && mshr.has_store)
+							{
+								_allocate(sector_addr, slice);
+								_write_sector(sector_addr, ret.data, false);
+							}
+							std::memcpy(mshr.sector, ret.data, _sector_size);
+						}
+						mshr.filled = true;
+					}
+					_apply_subentries(mshr, sector_addr, slice);
+
+					//return one load per clock
+					if (bank.return_pipline.is_write_valid() && !mshr.ready.empty())
+					{
+						bank.return_pipline.write(mshr.ready.front());
+						mshr.ready.pop();
 					}
 
-					if(mshr.subentries.empty())
+					if(mshr.ready.empty())
 					{
 						mem_higher->read_return(slice.mem_higher_port);
 						slice.mshrs.erase(sector_addr); //free mshr
@@ -125,6 +193,10 @@ void UnitCache::_recive_request()
 			bool cached = !(request.flags.omit_cache & (0x1 << _level));
 			if(!cached)
 			{
+				if (request.type == MemoryRequest::Type::STORE)
+					if (const uint8_t* dirty_data = _invalidate_sector(sector_addr))
+						_write_back(sector_addr, dirty_data, slice);
+
 				//Forward request
 				request.dst.push(request.port, 8);
 				request.port = slice.mem_higher_port;
@@ -133,8 +205,8 @@ void UnitCache::_recive_request()
 			}
 			else if(request.type == MemoryRequest::Type::LOAD)
 			{
-				//check data array
-				uint8_t* sector_data = _read_sector(sector_addr);
+				//a load waits behind a store to its sector still on the miss path
+				uint8_t* sector_data = slice.stores_pending.count(sector_addr) ? nullptr : _read_sector(sector_addr);
 				log.tag_array_access++;
 
 				if(sector_data)
@@ -147,9 +219,37 @@ void UnitCache::_recive_request()
 				else
 				{
 					//Miss: allocate a block and insert into miss queue
-					if(_miss_alloc) _allocate_block(sector_addr);
+					if(_miss_alloc) _allocate(sector_addr, slice);
 					slice.miss_network.write(request, b);
+					slice.misses_pending[sector_addr]++;
 				}
+			}
+			else if (request.type == MemoryRequest::Type::STORE)
+			{
+				log.stores++;
+				log.tag_array_access++;
+				const bool in_flight = slice.misses_pending.count(sector_addr) || slice.mshrs.count(sector_addr);
+				if (!in_flight && _read_sector(sector_addr))
+				{
+					_merge_sector(sector_addr, sector_offset, request.data, request.size);
+					if(request.flags.no_evict) _pin(sector_addr);
+					log.store_hits++;
+					log.data_array_writes++;
+				}
+				else
+				{
+					if (_miss_alloc) _allocate(sector_addr, slice);
+					slice.miss_network.write(request, b);
+					slice.misses_pending[sector_addr]++;
+					slice.stores_pending[sector_addr]++;
+				}
+			}
+			else if(request.type == MemoryRequest::Type::RELEASE)
+			{
+				for(uint i = 0; i < _block_size; i += _sector_size)
+					_assert(!slice.stores_pending.count(_get_block_addr(request.paddr) + i));
+				_release(request.paddr);
+				log.releases++;
 			}
 			else _assert(false);
 
@@ -167,6 +267,31 @@ void UnitCache::_recive_request()
 		paddr_t sector_addr = _get_sector_addr(miss.paddr);
 		if(slice.mshrs.find(sector_addr) == slice.mshrs.end())
 		{
+			if (miss.type == MemoryRequest::Type::STORE)
+			{
+				const uint offset = _get_sector_offset(miss.paddr);
+				bool applied = _merge_sector(sector_addr, offset, miss.data, miss.size);
+				if (!applied && offset == 0 && miss.size == _sector_size)
+				{
+					if (!_write_sector(sector_addr, miss.data, true))
+					{
+						_allocate(sector_addr, slice);
+						_write_sector(sector_addr, miss.data, true);
+					}
+					log.store_allocates++;
+					applied = true;
+				}
+				if (applied)
+				{
+					if(miss.flags.no_evict) _pin(sector_addr);
+					log.data_array_writes++;
+					_count_down(slice.misses_pending, sector_addr);
+					_count_down(slice.stores_pending, sector_addr);
+					slice.miss_network.read(0);
+					continue;
+				}
+			}
+
 			//Didn't find mshr. Try to allocate one
 			if(slice.mshrs.size() < _num_mshr) 
 				MSHR& mshr = slice.mshrs[sector_addr]; //Allocated a new MSHR
@@ -177,7 +302,9 @@ void UnitCache::_recive_request()
 		MSHR& mshr = slice.mshrs[sector_addr];
 		if(mshr.subentries.size() < _num_subentries)
 		{
+			if (miss.type == MemoryRequest::Type::STORE) mshr.has_store = true;
 			mshr.subentries.push(miss);
+			_count_down(slice.misses_pending, sector_addr);
 			slice.miss_network.read(0);
 			if(request_sector)
 			{
