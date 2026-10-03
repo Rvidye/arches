@@ -14,7 +14,7 @@
 
 namespace Arches {
 
-const static std::vector<std::string> arch_names = {"TRaX", "STRaTA", "STRaTA-RT", "Dual-Streaming", "RIC"};
+const static std::vector<std::string> arch_names = {"TRaX", "STRaTA", "STRaTA-RT", "Dual-Streaming", "RIC", "UnitTests"};
 
 struct SceneConfig
 {

@@ -7,6 +7,7 @@
 #include "trax-kernel/intersect.hpp"
 #include "units/unit-texture.hpp"
 #include "units/unit-shader-launcher.hpp"
+#include "tests/unit-tests.hpp"
 
 namespace Arches {
 
@@ -837,7 +838,7 @@ int main(int argc, char* argv[])
 	sim_config.set_param("config-dir", Arches::get_default_config_dir());
 	sim_config.set_param("kernel-path", Arches::get_default_kernel_path());
 	sim_config.parse(argc, argv);
-
+	if (sim_config.get_string("arch-name") == "UnitTests") return Arches::Tests::run_unit_tests(sim_config) == 0 ? 0 : 1;
 	Arches::TRaX::run_sim_trax(sim_config);
 	return 0;
 }
