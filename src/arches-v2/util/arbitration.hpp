@@ -12,6 +12,25 @@ public:
 	virtual uint get_index() = 0;
 };
 
+// Rotate right within MASK_T's own width. rotr() rotates 64 or 128 bits, for narrow MASK_T the bits that wrap around
+// land above the the type and are truncated away.
+template<typename MASK_T>
+inline MASK_T rotr_mask(MASK_T mask, uint n)
+{
+	constexpr uint W = sizeof(MASK_T) * 8;
+	if constexpr (W >= 64)
+	{
+		return rotr(mask, n);
+	}
+	else
+	{
+		n %= W;
+		if (n == 0) return mask;
+		uint64_t m = (uint64_t)mask;
+		return (MASK_T)(((m >> n) | (m << (W - n))) & ((1ull << W) - 1));
+	}
+}
+
 //Uses a nbit integer and BM2 extension to implement a computational and stoarge efficent arbiter for up to 64 clients
 template<typename MASK_T = uint64_t>
 class RoundRobinArbiter : public Arbiter
@@ -55,7 +74,7 @@ public:
 		if(num_pending() == 0)
 			return ~0u;
 
-		MASK_T rot_mask = rotr(_pending, _priority_index); //rotate the mask so the last index flag is in the 0 bit
+		MASK_T rot_mask = rotr_mask(_pending, _priority_index); //rotate the mask so the last index flag is in the 0 bit
 		uint offset = ctz(rot_mask); //count the number of 0s till the next 1
 		uint grant_index = (_priority_index + offset) % (sizeof(MASK_T) * 8); //grant the next set bit
 		_priority_index = grant_index; //make the grant bit the highest priority bit so that it will continue to be granted until removed
@@ -115,7 +134,7 @@ public:
 		if(num_pending() == 0)
 			return ~0u;
 
-		MASK_T rot_mask = rotr(_pending, _priority_index); //rotate the mask so the last index flag is in the 0 bit
+		MASK_T rot_mask = rotr_mask(_pending, _priority_index); //rotate the mask so the last index flag is in the 0 bit
 		uint offset = ctz(rot_mask); //count the number of 0s till the next 1
 		uint grant_index = (_priority_index + offset) % (sizeof(MASK_T) * 8); //grant the next set bit
 		if(grant_index != _priority_index) _grant_counter = 0; //if this a new grant chain reset the counter
