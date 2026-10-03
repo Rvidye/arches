@@ -33,7 +33,8 @@ public:
 	{
 		_request_network.clock();
 
-		if (_request_network.is_read_valid(0))
+		//clock fall keeps the current request when the return network is full, so only take a new one once it is done.
+		if (_request_network.is_read_valid(0) && !_current_request_valid)
 		{
 			_current_request = _request_network.read(0);
 			_current_request_valid = true;

@@ -42,6 +42,7 @@ void UnitTP::reset()
 	for(uint i = 0; i < _thread_data.size(); i++)
 	{
 		ThreadData& thread = _thread_data[i];
+		thread.halted = false;
 		thread.int_regs.zero.u64 = 0ull;
 		thread.int_regs.ra.u64 = 0ull;
 		thread.int_regs.sp.u64 = 0ull;
@@ -259,7 +260,13 @@ void UnitTP::clock_rise()
 void UnitTP::clock_fall()
 {
 	uint thread_id = _thread_exec_arbiter.get_index();
-	if(thread_id == ~0u) thread_id = _last_thread_id;
+	if (thread_id == ~0u)
+	{
+		//No thread is ready, so decode the last one only to attribute the stall.
+		//A halted thread has nothing pending, so decoding it would re-execute its final jump to 0
+		if (_thread_data[_last_thread_id].halted) return;
+		thread_id = _last_thread_id;
+	}
 	ThreadData& thread = _thread_data[thread_id];
 
 	DecodePhase stall_phase;
@@ -367,8 +374,13 @@ void UnitTP::clock_fall()
 	{
 		thread.instr.data = 0;
 		_thread_exec_arbiter.remove(thread_id);
-		if(++_num_halted_threads == _num_threads)
-			--simulator->units_executing;
+		//Count each thread once. Re-entering this path used to over-count, retiring the TP while it still had running thread.
+		if (!thread.halted)
+		{
+			thread.halted = true;
+			if (++_num_halted_threads == _num_threads)
+				--simulator->units_executing;
+		}
 	}
 	else
 	{

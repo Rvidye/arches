@@ -45,6 +45,7 @@ protected:
 
 		uint8_t float_regs_pending[32];
 		uint8_t int_regs_pending[32];
+		bool halted{ false };
 
 		ISA::RISCV::Instruction instr;
 		ISA::RISCV::InstructionInfo instr_info;
@@ -82,6 +83,7 @@ public:
 	void clock_fall() override;
 	void reset() override;
 	void set_entry_point(uint64_t entry_point);
+	bool has_work() override { return _num_halted_threads < _num_threads; }
 
 protected:
 	enum class DecodePhase : uint8_t
