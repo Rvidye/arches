@@ -32,9 +32,9 @@ struct MemoryRequest
 
 	struct Flags
 	{
-		uint8_t omit_cache : 3;
+		uint8_t omit_cache : 4;
 		uint8_t trigger_prefetch : 1;
-		uint8_t : 4;
+		uint8_t : 3;
 	};
 
 	const static uint MAX_SIZE = CACHE_SECTOR_SIZE;

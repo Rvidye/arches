@@ -335,7 +335,7 @@ void UnitTP::clock_fall()
 			req.dst.push(thread_id, 4);
 			req.port = _tp_index;
 			if(thread.instr_info.instr_type == ISA::RISCV::InstrType::STORE)
-				req.flags.omit_cache = 0b111;
+				req.flags.omit_cache = 0b1111;
 			_set_dependancies(thread_id);
 
 			UnitMemoryBase* mem = (UnitMemoryBase*)_unit_table[(uint)thread.instr_info.instr_type];
