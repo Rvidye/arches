@@ -15,6 +15,8 @@ namespace Units {
 
 #define ENABLE_PROFILER 0
 
+class UnitShaderLauncher;
+
 class UnitTP : public UnitBase
 {
 public:
@@ -33,6 +35,7 @@ public:
 		const std::vector<UnitSFU*>* unique_sfus{nullptr};
 		const std::vector<UnitMemoryBase*>* unique_mems{nullptr};
 		UnitMemoryBase* inst_cache{nullptr};
+		UnitShaderLauncher* launcher{ nullptr };
 	};
 
 protected:
@@ -45,7 +48,8 @@ protected:
 
 		uint8_t float_regs_pending[32];
 		uint8_t int_regs_pending[32];
-		bool halted{ false };
+		bool halted{ false }; //returned to PC 0
+		bool retired{ true }; //launch mode halted with nothing in flight, reported free
 
 		ISA::RISCV::Instruction instr;
 		ISA::RISCV::InstructionInfo instr_info;
@@ -67,6 +71,10 @@ protected:
 	uint _last_thread_id;
 	uint _num_threads;
 	uint _num_halted_threads;
+
+	UnitShaderLauncher* _launcher;
+	uint _num_active_threads{ 0 };//threads not yet retired
+	uint _pending_done{ 0 };//retired threads not yet reported to the launcher
 	RoundRobinArbiter<uint16_t> _thread_exec_arbiter;
 	std::vector<ThreadData> _thread_data;
 
@@ -83,7 +91,11 @@ public:
 	void clock_fall() override;
 	void reset() override;
 	void set_entry_point(uint64_t entry_point);
-	bool has_work() override { return _num_halted_threads < _num_threads; }
+	bool has_work() override 
+	{
+		if (_launcher) return _num_active_threads > 0 || _pending_done > 0;
+		return _num_halted_threads < _num_threads;
+	}
 
 protected:
 	enum class DecodePhase : uint8_t
@@ -100,6 +112,11 @@ protected:
 	void _process_load_return(const MemoryReturn& ret);
 	void _clear_register_pending(uint thread_id, ISA::RISCV::DstReg dst);
 	void _log_instruction_issue(uint thread_id);
+	void _halt_thread(uint thread_id);
+	bool _has_pending_registers(uint thread_id) const;
+	void _retire_if_quite(uint thread_id);
+	void _accept_launch();
+	void _send_done();
 
 public:
 	class Log

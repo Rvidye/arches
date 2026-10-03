@@ -424,8 +424,18 @@ class ELF final
 		};
 		std::vector<LoadableSegment*> segments_intersected;
 
+		//Symbol addresses by name, from the symbol table and its string table.
+		std::unordered_map<std::string, uint64_t> symbol_addresses;
+
 	public:
 		explicit ELF(std::string const& path);
+
+		//The address of a function or variable by name, 0 if the ELF has no such symbol.
+		uint64_t symbol_address(std::string const& name) const
+		{
+			auto it = symbol_addresses.find(name);
+			return it == symbol_addresses.end() ? ~0ull : it->second;
+		}
 
 		//return the physical address imidiatly following the end of the elf. This can be used as the start of our heap
 		paddr_t load(uint8_t* mem)

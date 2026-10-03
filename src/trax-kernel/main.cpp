@@ -48,14 +48,12 @@ static std::atomic_uint node_steps = 0;
 static std::atomic_uint prim_steps = 0;
 #endif
 
-inline static void kernel(const TRaXKernelArgs& args)
+inline static void trace_pixel(const TRaXKernelArgs& args, uint index)
 {
 	constexpr uint32_t SPP = 1;
 	constexpr uint TILE_X = 4;
 	constexpr uint TILE_Y = 8;
 	constexpr uint TILE_SIZE = TILE_X * TILE_Y;
-	
-	for (uint index = fchthrd(); index < args.framebuffer_size; index = fchthrd())
 	{
 		uint tile_id = index / TILE_SIZE;
 		//tile_id = rtm::RNG::fast_hash(tile_id) % (args.framebuffer_size / TILE_SIZE);
@@ -143,6 +141,12 @@ inline static void kernel(const TRaXKernelArgs& args)
 	}
 }
 
+inline static void kernel(const TRaXKernelArgs& args)
+{
+	for (uint index = fchthrd(); index < args.framebuffer_size; index = fchthrd())
+		trace_pixel(args, index);
+}
+
 inline static void mandelbrot(const TRaXKernelArgs& args)
 {
 	constexpr uint MAX_ITERS = 100;
@@ -183,6 +187,11 @@ int main()
 {
 	kernel(*(const TRaXKernelArgs*)TRAX_KERNEL_ARGS_ADDRESS);
 	return 0;
+}
+
+extern "C" void trax_pixel(uint32_t index)
+{
+	trace_pixel(*(const TRaXKernelArgs*)TRAX_KERNEL_ARGS_ADDRESS, index);
 }
 #else
 

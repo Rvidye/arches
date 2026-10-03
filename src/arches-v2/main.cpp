@@ -6,6 +6,7 @@
 #include "trax-kernel/include.hpp"
 #include "trax-kernel/intersect.hpp"
 #include "units/unit-texture.hpp"
+#include "units/unit-shader-launcher.hpp"
 
 namespace Arches {
 
@@ -486,6 +487,8 @@ static void run_sim_trax(SimulationConfig& sim_config)
 	std::vector<Units::UnitTP*> tps;
 	std::vector<Units::UnitSFU*> sfus;
 	std::vector<Units::UnitThreadScheduler*> thread_schedulers;
+	std::vector<Units::UnitShaderLauncher*> launchers;
+	const bool tp_launch_mode = sim_config.get_int("tp-launch-mode") != 0;
 	std::vector<UnitRTCore*> rtcs;
 	std::vector<Units::UnitTexture*> tus;
 	std::vector<UnitL1Cache*> l1ds;
@@ -634,7 +637,26 @@ static void run_sim_trax(SimulationConfig& sim_config)
 		sfu_lists.emplace_back(sfu_list);
 		mem_lists.emplace_back(mem_list);
 
+		Units::UnitShaderLauncher* launcher = nullptr;
+		if (tp_launch_mode)
+		{
+			Units::UnitShaderLauncher::Configuration launcher_config;
+			launcher_config.num_tps = num_tps;
+			launcher_config.threads_per_tp = num_threads;
+			launcher_config.tm_index = tm_index;
+			launcher_config.atomic_regs = &atomic_regs;
+			launcher_config.block_size = 32;
+			launcher_config.entry_pc = elf.symbol_address("trax_pixel");
+			_assert(launcher_config.entry_pc != ~0ull);
+			launcher_config.dispatch_count = kernel_args.framebuffer_size;
+
+			launcher = _new Units::UnitShaderLauncher(launcher_config);
+			launchers.push_back(launcher);
+			simulator.register_unit(launcher);
+		}
+
 		Units::UnitTP::Configuration tp_config;
+		tp_config.launcher = launcher;
 		tp_config.tm_index = tm_index;
 		tp_config.stack_size = stack_size;
 		tp_config.cheat_memory = vec_mem.data();
@@ -761,6 +783,12 @@ static void run_sim_trax(SimulationConfig& sim_config)
 	print_header("TP");
 	delta_log(tp_log, tps);
 	tp_log.print(tps.size());
+	if (!launchers.empty())
+	{
+		uint64_t launches = 0;
+		for (auto& launcher : launchers) launches += launcher->launches();
+		printf("\nInvocations launched: %lld\n", launches);
+	}
 
 	if(!rtcs.empty())
 	{
@@ -796,6 +824,7 @@ static void run_sim_trax(SimulationConfig& sim_config)
 	for(auto& sfu : sfus) delete sfu;
 	for(auto& l1d : l1ds) delete l1d;
 	for(auto& thread_scheduler : thread_schedulers) delete thread_scheduler;
+	for(auto& launcher : launchers) delete launcher;
 	for(auto& rtc : rtcs) delete rtc;
 	for(auto& l2 : l2s) delete l2;
 	for(auto& dram : drams) delete dram;

@@ -1,4 +1,5 @@
 #include "unit-tp.hpp"
+#include "unit-shader-launcher.hpp"
 
 namespace Arches {
 namespace Units {
@@ -23,6 +24,7 @@ UnitTP::UnitTP(const Configuration& config) :
 	_tp_index(config.tp_index),
 	_tm_index(config.tm_index),
 	_num_tps_per_i_cache(config.num_tps_per_i_cache),
+	_launcher(config.launcher),
 	log()
 {
 	for(uint i = 0; i < _thread_data.size(); i++)
@@ -38,11 +40,12 @@ void UnitTP::reset()
 
 	_num_halted_threads = 0;
 	_last_thread_id = 0;
+	_num_active_threads = 0;
+	_pending_done = 0;
 
 	for(uint i = 0; i < _thread_data.size(); i++)
 	{
 		ThreadData& thread = _thread_data[i];
-		thread.halted = false;
 		thread.int_regs.zero.u64 = 0ull;
 		thread.int_regs.ra.u64 = 0ull;
 		thread.int_regs.sp.u64 = 0ull;
@@ -55,13 +58,112 @@ void UnitTP::reset()
 			thread.float_regs_pending[i] = 0;
 		}
 
+		if (_launcher)
+		{
+			//Idle untill the launcher starts an invocation on this thread.
+			thread.halted = true;
+			thread.retired = true;
+			continue;
+		}
+
+		thread.halted = false;
+		thread.retired = false;
 		thread.instr.data = reinterpret_cast<uint32_t*>(_cheat_memory)[thread.pc / 4];
 		thread.instr_info = thread.instr.get_info();
 		if(_check_dependancies(i) == 0)
 			_thread_exec_arbiter.add(i);
 	}
 
-	simulator->units_executing++;
+	if(!_launcher) simulator->units_executing++;
+}
+
+void UnitTP::_halt_thread(uint thread_id)
+{
+	ThreadData& thread = _thread_data[thread_id];
+	thread.instr.data = 0;
+	_thread_exec_arbiter.remove(thread_id);
+
+	if (thread.halted) return;
+	thread.halted = true;
+
+	if (_launcher)
+	{
+		_retire_if_quite(thread_id);
+		return;
+	}
+	if (++_num_halted_threads == _num_threads)
+		--simulator->units_executing;
+}
+
+bool UnitTP::_has_pending_registers(uint thread_id) const
+{
+	const ThreadData& thread = _thread_data[thread_id];
+	for(uint r = 0; r < 32; ++r)
+		if (thread.int_regs_pending[r] || thread.float_regs_pending[r])
+			return true;
+	return false;
+}
+
+//launched thread is free once it has retunred and nothing it issued can still write it's registers
+void UnitTP::_retire_if_quite(uint tid)
+{
+	ThreadData& thread = _thread_data[tid];
+	if (!_launcher || !thread.halted || thread.retired || _has_pending_registers(tid)) return;
+
+	thread.retired = true;
+	_pending_done++;
+	if (--_num_active_threads == 0)
+		--simulator->units_executing;
+}
+
+void UnitTP::_accept_launch() 
+{
+	if (!_launcher || !_launcher->launch_port_read_valid(_tp_index)) return;
+
+	uint thread_id = ~0u;
+	for(uint i = 0; i < _num_threads; ++i)
+		if (_thread_data[i].retired) { thread_id = i; break; }
+
+	_assert(thread_id != ~0u);
+	if (thread_id == ~0u) return;
+
+	const LaunchRequest request = _launcher->read_launch(_tp_index);
+	ThreadData& thread = _thread_data[thread_id];
+
+	for (uint r = 0; r < 32; ++r)
+	{
+		thread.int_regs.registers[r].u64 = 0ull;
+		thread.float_regs.registers[r].u32 = 0u;
+		thread.int_regs_pending[r] = 0;
+		thread.float_regs_pending[r] = 0;
+	}
+
+	for (uint k = 0; k < 8; ++k)
+	{
+		thread.int_regs.registers[10 + k].u64 = (uint64_t)(int64_t)(int32_t)request.int_args[k];
+		thread.float_regs.registers[10 + k].u32 = request.float_args[k];
+	}
+
+	thread.pc = request.pc;
+	thread.halted = false;
+	thread.retired = false;
+	thread.instr.data = reinterpret_cast<uint32_t*>(_cheat_memory)[thread.pc / 4];
+	thread.instr_info = thread.instr.get_info();
+	if (_check_dependancies(thread_id) == 0)
+		_thread_exec_arbiter.add(thread_id);
+
+	if (_num_active_threads++ == 0)
+		simulator->units_executing++;
+}
+
+void UnitTP::_send_done()
+{
+	if (_pending_done == 0 || !_launcher->done_port_write_valid(_tp_index)) return;
+
+	LaunchDone done;
+	done.tp = _tp_index;
+	_launcher->write_done(done);
+	_pending_done--;
 }
 
 void UnitTP::set_entry_point(uint64_t entry_point)
@@ -85,6 +187,12 @@ void UnitTP::_clear_register_pending(uint thread_id, ISA::RISCV::DstReg dst)
 	ThreadData& thread = _thread_data[thread_id];
 	if (is_int(dst.type)) thread.int_regs_pending[dst.index] = 0;
 	else                  thread.float_regs_pending[dst.index] = 0;
+	//never put a halted thread back in arbiter
+	if (thread.halted)
+	{
+		_retire_if_quite(thread_id);
+		return;
+	}
 
 	if(_check_dependancies(thread_id) == 0)
 		 _thread_exec_arbiter.add(thread_id);
@@ -255,10 +363,14 @@ void UnitTP::clock_rise()
 		ISA::RISCV::DstReg dst_reg(ret.dst.pop(9));
 		_clear_register_pending(thread_id, dst_reg);
 	}
+
+	_accept_launch();
 }
 
 void UnitTP::clock_fall()
 {
+	if (_launcher) _send_done();
+
 	uint thread_id = _thread_exec_arbiter.get_index();
 	if (thread_id == ~0u)
 	{
@@ -372,15 +484,16 @@ void UnitTP::clock_fall()
 
 	if(thread.pc == 0x0ull)
 	{
-		thread.instr.data = 0;
-		_thread_exec_arbiter.remove(thread_id);
-		//Count each thread once. Re-entering this path used to over-count, retiring the TP while it still had running thread.
-		if (!thread.halted)
-		{
-			thread.halted = true;
-			if (++_num_halted_threads == _num_threads)
-				--simulator->units_executing;
-		}
+		//thread.instr.data = 0;
+		//_thread_exec_arbiter.remove(thread_id);
+		////Count each thread once. Re-entering this path used to over-count, retiring the TP while it still had running thread.
+		//if (!thread.halted)
+		//{
+		//	thread.halted = true;
+		//	if (++_num_halted_threads == _num_threads)
+		//		--simulator->units_executing;
+		//}
+		_halt_thread(thread_id);
 	}
 	else
 	{

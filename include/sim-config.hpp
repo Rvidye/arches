@@ -72,6 +72,7 @@ public:
 		set_param("logging-interval", 10000);
 		set_param("arch-name", "TRaX");
 		set_param("max-rays", 128);
+		set_param("tp-launch-mode", 0); // 0 for fchthrd, 1 UnitShaderLauncher invocation
 		set_param("dataset-dir", default_dataset_dir());
 		set_param("scene-name", "sponza");
 		set_param("framebuffer-width", 1024);

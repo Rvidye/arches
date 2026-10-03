@@ -242,6 +242,24 @@ ELF::ELF(std::string const& path) {
 				elem.segment = nullptr;
 			}
 		}
+
+		for (const SectionHeader::ArrayElement& section : section_header->arr) {
+			if (section.sh_type != SectionHeader::ArrayElement::SH_TYPE::SHT_SYMTAB) continue;
+			_assert(elf_header->e_ident.ei_class == ELF_Header::E_IDENT::EI_CLASS::ELFCLASS64);
+
+			const SectionHeader::ArrayElement& strings = section_header->arr[section.sh_link];
+			std::vector<char> names(static_cast<size_t>(strings.sh_size.u64) + 1, '\0');
+			fseek(file.backing, static_cast<long int>(strings.sh_offset.u64), SEEK_SET);
+			file.read_bin(names.data(), static_cast<size_t>(strings.sh_size.u64));
+
+			for (uint64_t offset = 0; offset + 24 <= section.sh_size.u64; offset += 24) {
+				fseek(file.backing, static_cast<long int>(section.sh_offset.u64 + offset), SEEK_SET);
+				const uint32_t name = elf_header->fix_endianness(file.read_bin<uint32_t>());
+				fseek(file.backing, static_cast<long int>(section.sh_offset.u64 + offset + 8), SEEK_SET);
+				const uint64_t value = elf_header->fix_endianness(file.read_bin<uint64_t>());
+				if (name != 0 && name < strings.sh_size.u64) symbol_addresses[std::string(&names[name])] = value;
+			}
+		}
 	} catch (...) {
 		delete program_header;
 		delete elf_header;
