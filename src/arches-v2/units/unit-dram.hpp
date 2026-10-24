@@ -57,6 +57,7 @@ private:
 
 	uint _num_req_piplines{2};
 	uint _pending_requests = 0;
+	uint _pending_stores = 0;
 	bool _busy{false};
 
 	paddr_t _partition_mask{0x0ull};
@@ -91,7 +92,7 @@ public:
 
 	bool has_work() override
 	{
-		if (_pending_requests > 0) return true;
+		if (_pending_requests > 0 || _pending_stores > 0) return true;
 		for (auto& controller : _controllers)
 			for (auto& pipline : controller.req_piplines)
 				if (!pipline.empty()) return true;
